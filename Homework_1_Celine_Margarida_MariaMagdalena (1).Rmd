@@ -1,0 +1,965 @@
+---
+title: "Bayesian Statistics and Probabilistic Programming Spring 2023 - Homework 01"
+author: "Celine Odding, Margarida de Lima Santos Gonçalves, Maria Magdalena Pol Pujadas"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+***
+###### LaTeX macros
+$\def\prob{P}$
+$\def\argmax{\operatorname{arg\,max}}$
+$\def\argmin{\operatorname{arg\,min}}$
+$\def\borel{\operatorname{Borel}}$
+$\def\cE{\cal E}$
+$\def\cP{\cal P}$
+$\def\R{\mathbb{R}}$ 
+$\def\N{\mathbb{N}}$
+$\def\Z{\mathbb{Z}}$
+$\def\Ee{\operatorname{E}}$
+$\def\va{\text{v.a.}}$
+$\def\var{\operatorname{var}}$
+$\def\cov{\operatorname{cov}}$
+$\def\cor{\operatorname{cor}}$
+$\def\binomdist{\operatorname{Binom}}$
+$\def\berndist{\operatorname{Ber}}$
+$\def\betabinomdist{\operatorname{Beta-Binom}}$
+$\def\betadist{\operatorname{Beta}}$
+$\def\expdist{\operatorname{Exponential}}$
+$\def\gammadist{\operatorname{Gamma}}$
+$\def\hyperdist{\operatorname{Hypergeom}}$
+$\def\hypergeomdist{\operatorname{Hypergeom}}$
+$\DeclareMathOperator{\multinomialdist}{Multinomial}$
+$\DeclareMathOperator{\multinomdist}{Multinom}$
+$\def\poissondist{\operatorname{Poisson}}$
+$\def\geomdist{\operatorname{Geom}}$
+$\def\normaldist{\operatorname{N}}$
+$\def\unifdist{\operatorname{Unif}}$
+$\DeclareMathOperator{\indica}{\mathbb{1}}$
+$\def\CondTo{\mathbin{|\mskip0.5mu}}$
+***
+
+### Submissions: 
+
+By **groups** of _about_ three students (meaning: two is OK, four is not advisable but possible. Individual homeworks 
+will also be accepted but collaborative work is preferable). 
+
+Please send me an **email** with the team members names as soon as you have formed it.
+
+Only **one copy** of each group's work must be uploaded (by any member).
+
+**Full names** and **email address** of all team members must appear in the header.
+
+### Format: 
+
+A Jupyter or R Markdown **notebook,** with a **header** clearly stating the names of all contributors.
+
+### Documentation: 
+
+Comments **in code cells** (e.g., meaning of variables, parameters, purpose of functions) are necessary but not sufficient.
+
+You are expected to give full explanations of steps taken in your solution (in **Markdown cells**), as well as discussion of results and their meaning.
+
+Do not be afraid of being too verbose or too elementary, explain as if to someone learning.
+
+### External sources
+
+Getting _inspiration_ from any book, document, blog, web page, even mimicking solutions given in there, is **allowed and encouraged,** provided you give a **proper reference,** understand every such material, and explain it in you own words, even more exhaustively.
+
+Do not **copy/paste literally large chunks of code** I will detect it, believe me, even missing source reference. Bleak consequences.
+
+### Deadline:
+
+Completed assignments are due on Monday, April 17. They are to be uploaded to the Virtual Campus.
+
+<h1 style="color:blue">01 - Stan version of a conjugate prior problem</h1>
+
+<h2 style="color:blue">Modelling Earthquake Waiting Times</h2>
+
+Consider the problem in `Exponential.02.Earthquake` (notebook in 2023-03-27 folder), where the goal is to study earthquake waiting times.
+
+Likelihood is modelled as an $\expdist(\lambda)$ and $\lambda$ is given a conjugate prior, $\lambda\sim\gammadist(\alpha,\beta)$.
+
+In the `Exponential.02.Earthquake` notebook some simulations are performed for:
+
+01. Prior pdf for $\lambda$.
+02. Prior predictive pdf for the waiting time.
+03. Posterior pdf for $\lambda$.
+04. Posterior predictive for new waiting time.
+
+using known theoretical (analytical) descriptions of these distributions.
+
+Your task is to redo these simulations using Stan (avoiding conjugate prior formulas), then compare your results to the analytical ones. 
+
+Use this comparison to tune up adjustable parameters in Stan sampling, such as chain length.
+
+# Problem introduction
+
+In 2015, there were 9 significant earthquakes of magnitude 4.0+ in California, occurring on January 4, January 20, January 28, May 22, July 21, July 25, August 17, September 16, and December 30.
+The waiting times between these earthquakes are modeled using the exponential distribution, with the parameter λ representing the expected waiting time between two earthquakes. The prior distribution for λ is assumed to be a gamma distribution with parameters α and β, where α represents the prior effective sample size and β represents the prior mean waiting time between earthquakes.
+
+Suppose our prior expectation for the waiting time between earthquakes is 1/30 days, i.e., λ=30. We also want to use a prior effective sample size of one interval between earthquakes, which means that α=1. Using these values, we can determine the value of β as β=α/λ=1/30. Therefore, the prior distribution for λ is a gamma distribution with parameters α=1 and β=1/30.
+
+We observe the waiting times between earthquakes to be 16, 8, 114, 60, 4, 23, 30, and 105 days. We exclude the days when no events were observed, which is a total of 4 days. The number of intervals between the earthquakes is 8. Using the observed data and the prior distribution, we can compute the posterior distribution of λ, which provides an updated estimate of the expected waiting time between earthquakes in California.
+
+$$
+    \begin{array}{lcl}
+    y &= &(16, 8, 114, 60, 4, 23, 30, 105),\\
+    y &= &(3, 16, 8, 114, 60, 4, 23, 30, 105, 1),\\
+    y &= &(3, 16, 8, 114, 60, 4, 23, 30, 105).
+    \end{array}
+$$
+
+```{r}
+#install.packages("rstan", dependencies=TRUE,repos= "https://cloud.r-project.org")
+#remove.packages(c("StanHeaders", "rstan"))
+#install.packages("StanHeaders", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+#install.packages("rstan", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+library(rstan)
+require(StanHeaders)
+library(ggplot2)
+```
+```{r}
+rstan_options(auto_write = TRUE)
+rstan_options(threads_per_chain = parallel::detectCores())
+
+```
+
+
+ To plot the analytical predictive distributions, we need to import the actuar package. This is because, as specified in the 03.Exponential.02.Earthquake notebook, the predictive distribution in this case is a Pareto II (Lomax) distribution. That is why we are installing it now below. 
+
+
+```{r}
+#install.packages("actuar")
+
+require(actuar)
+
+library(actuar)
+
+#install.packages("coda")
+#install.packages("mvtnorm")
+
+#install.packages("R2jags")
+library(rjags)
+require(R2jags)
+#require(R2jags,quietly=TRUE)
+
+```
+
+
+# A.1. Simulate from the prior pdf 
+
+```{r}
+
+# retrieving the parameters for Gamma(alpha, beta) distribution, mentioned above.
+prior.a<-1 
+prior.b<-30
+
+# Obtaining the theoretical prior mean, variance and standard deviation of the Gamma distribution defined in the cell above.
+Theor.prior.mean<-prior.a/prior.b
+Theor.prior.var<-prior.a/prior.b^2
+Theor.prior.sd<-sqrt(Theor.prior.var)
+round(Theor.prior.mean,4)
+round(Theor.prior.var,4)
+round(Theor.prior.sd,4)
+```
+
+
+# A.2. Simulate from the prior predictive pdf
+
+When simulating the prior predictive for the waiting time, there is no need to take any other factors into consideration, as the definition of the prior predictive entails that it is derived solely from the exponential of the prior probability density function for λ, represented as 
+$$
+    Y_{i}\mskip8mu\text{i.i.d.}\sim\mskip8mu\operatorname{Exponential}(\theta),
+$$
+It is important to keep in mind that when generating these simulations, we must refrain from using any information gathered from the observations, as this process exclusively deals with prior functions. Therefore, by solely relying on the prior pdf for lambda, we can effectively simulate the prior predictive distribution for the waiting time without any extraneous variables.
+
+# A.3. Simulate from the posterior pdf
+
+For the posterior function, we first initialize vector observations y (see y-values above). The posterior distribution is modeled as a Gamma distribution with shape parameter α' and rate parameter β', which are calculated based on the prior parameters α and β and the observed data. Specifically, α' = α + n and β' = β + nȳ, where n is the number of observations and ȳ (y_bar) is the sample mean. These parameters will be used to plot analytical functions, but will not be used for simulations. The Gamma distribution is commonly used as a prior for the precision parameter of a normal distribution. (Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2014). Bayesian Data Analysis, Third Edition (Chapters 2 and 3). Chapman and Hall/CRC)
+ 
+```{r}
+y<-c(16, 8, 114, 60, 4, 23, 30, 105)
+n<-length(y)
+ybar<-mean(y)           # ȳ
+# round(ybar,2)
+nybar<-sum(y)      
+
+posterior.a<-prior.a+n    # α'
+posterior.b<-prior.b+nybar  # β'
+
+# calculating statistics of the posterior distribution
+Theor.lambda.post.mean<-posterior.a/posterior.b   
+Theor.lambda.post.mode<-(posterior.a-1)/posterior.b  # For alpha>1, 0 for alpha=1.
+Theor.lambda.post.var<-posterior.a/posterior.b^2
+Theor.lambda.post.sd<-sqrt(Theor.lambda.post.var)
+
+# rounding the values to cut some decimals
+round(Theor.lambda.post.mean,4)
+round(Theor.lambda.post.mode,4)
+round(Theor.lambda.post.var,6)
+round(Theor.lambda.post.sd,4)
+
+```
+ 
+# A.4. Simulate from the posterior predictive pdf
+
+To perform prior simulations in STAN, the only inputs to the model are the prior parameters α and β, which specify the shape and scale of the Gamma distribution used to model the precision parameter λ. 
+
+The parameter θ is defined in the model, which is used to model λ, and will serve as a simulation of the prior probability density function (pdf) for λ.
+ 
+```{r}
+modelString <- "
+data {
+        real prior_a;
+        real prior_b;
+    }
+
+parameters {
+        real theta;
+    }
+
+model {
+        theta ~ gamma(prior_a,prior_b);
+    }
+
+generated quantities {
+        real y_pred;                     
+        y_pred = exponential_rng(theta);  // generating simulated samples for the waiting time prediction
+    }
+    "
+```
+```{r}
+# compile
+stanDso <- stan_model( model_code=modelString ) 
+```
+```{r}
+# don't pass any observations to the model!
+input_data <- list(prior_a=prior.a, prior_b=prior.b); 
+```
+
+
+```{r}
+# using 2000 iterations and 1000 warmup iterations since the complexity of the model does not require higher values 
+fit <- sampling(stanDso, data = input_data, iter = 2000, chains=1, warmup = 1000, thin = 1)  
+
+```
+
+```{r}
+
+# extracting the values for the waiting time
+pr_theta <- extract(fit, 'theta')
+pr_theta <- unlist(pr_theta, use.names=FALSE) # prior lambda
+pry_pred <- extract(fit, 'y_pred')
+pry_pred <- unlist(pry_pred, use.names=FALSE) # prior predictive waiting time
+```
+Simulations on the posterior pdfs
+
+Let's consider a new model that uses observations to perform simulations on the posterior probability density functions (PDFs). In this model, the number of observations (n) and the observation values (y[n]) are included in the simulations to generate posterior distributions.
+ 
+```{r}
+
+modelString <- "
+data {
+        real prior_a;
+        real prior_b;
+
+        int n;        // number of observations
+        real y[n];    // observation values
+    }
+
+parameters {
+        real theta;
+    }
+
+model {
+        theta ~ gamma(prior_a,prior_b);
+        y ~ exponential(theta);
+    }
+
+generated quantities {
+        real y_pred;
+        y_pred = exponential_rng(theta);
+    }
+    "
+```
+```{r}
+input_data <- list(n = n, y = y, prior_a=prior.a, prior_b=prior.b);  # again using the prior paramaters!
+fit <- sampling(stanDso, data = input_data, iter = 5000, chains=1, warmup = 2000, thin = 1)
+```
+
+```{r}
+# for this model, we also perfom the extractions
+pos_theta <- extract(fit, 'theta')
+pos_theta <- unlist(pos_theta, use.names=FALSE) # posterior lambda
+posy_pred <- extract(fit, 'y_pred')
+posy_pred <- unlist(posy_pred, use.names=FALSE) # posterior predictive expecting time
+
+ # Plotting the density for lambda and waiting times
+
+```
+
+
+Prior functions
+
+```{r}
+
+options(repr.plot.width=14,repr.plot.height=7)
+old.par<- par(mfrow=c(1,2))
+
+# Simulated prior parameter
+plot(density(pr_theta),
+     xlab=expression(pr_theta), col="blue",lwd=3,
+     main="Lambda", ylim=c(0,30))
+# Analytical prior parameter
+curve(dgamma(x, prior.a, prior.b), 
+      add=TRUE, col="hotpink")
+legend(cex=0.65,x=0.06,y=20,legend=c("Analytical prior", "Simulated prior"), 
+           col=c("hotpink", "blue"), lty=c(1,1), bty="n",lwd=2)
+# Simulated prior predictive
+plot(density(pry_pred),
+     xlab=expression(pry_pred), col="blue",lwd=3,
+     main="Waiting Time",xlim=c(0,1000), ylim=c(0,0.015))
+# Analytical prior predictive
+curve(dpareto(x, prior.a, prior.b), 
+      add=TRUE, col="hotpink", lwd=1.5, lty=2,5)
+legend(cex=0.65,x=200,y=0.010,legend=c("Analytical prior predictive", "Simulated prior predictive"), 
+           col=c("hotpink", "blue"), lty=c(2,1), bty="n",lwd=3)
+par(old.par)
+
+```
+
+
+ As we can see from the graphs above, both the analytical prior and simulated prior behave similarly as the curves overlap.
+
+Posterior Distributions
+ 
+```{r}
+options(repr.plot.width=14,repr.plot.height=7)
+old.par<- par(mfrow=c(1,2))
+
+# Simulated prior parameter
+plot(density(pos_theta),
+     xlab=expression(pos_theta), col="blue",lwd=3,
+     main="Lambda", ylim=c(0,30))
+# Analytical prior parameter
+curve(dgamma(x, prior.a, prior.b), 
+      add=TRUE, col="hotpink")
+legend(cex=0.65,x=0.06,y=20,legend=c("Analytical prior", "Simulated prior"), 
+           col=c("hotpink", "blue"), lty=c(1,1), bty="n",lwd=2)
+# Simulated prior predictive
+plot(density(posy_pred),
+     xlab=expression(posy_pred), col="blue",lwd=3,
+     main="Waiting Time",xlim=c(0,1000), ylim=c(0,0.016))
+# Analytical prior predictive
+curve(dpareto(x, prior.a, prior.b), 
+      add=TRUE, col="hotpink", lwd=1.5, lty=2,5)
+legend(cex=0.65,x=250,y=0.010,legend=c("Analytical prior predictive", "Simulated prior predictive"), 
+           col=c("hotpink", "blue"), lty=c(2,1), bty="n",lwd=3)
+par(old.par)
+
+```
+
+
+ The graph shows that the analytical and simulated prior behave similarly again, although the analytical prior curve has higher density values in the peak.
+
+Adjusting parameters
+
+As suggested in the assignment, and also being warned by STAN after fitting the simulation, we decided to adjust the chain size. The chain size was 1 at first, but we decided to make it 3. In order to avoid any potential bias caused by the initial starting point and to enable the assessment of convergence, it is necessary to take appropriate measures. We also increased the warmup iterations to 3000.
+
+```{r}
+fit <- sampling(stanDso, data = input_data, iter = 5000, chains=3, warmup = 3000, thin = 1) 
+pos_theta <- extract(fit, 'theta')
+pos_theta <- unlist(pos_theta, use.names=FALSE) # posterior lambda
+posy_pred <- extract(fit, 'y_pred')
+posy_pred <- unlist(posy_pred, use.names=FALSE) # posterior predictive expecting time
+options(repr.plot.width=14,repr.plot.height=7)
+old.par<- par(mfrow=c(1,2))
+
+options(repr.plot.width=14,repr.plot.height=7)
+old.par<- par(mfrow=c(1,2))
+# Simulated prior parameter
+plot(density(pos_theta),
+     xlab=expression(pos_theta), col="blue",lwd=3,
+     main="Lambda",ylim=c(0,60))
+# Analytical prior parameter
+curve(dgamma(x, posterior.a, posterior.b), 
+      add=TRUE, col="hotpink")
+legend(cex=0.65,x=0.08,y=50,legend=c("Analytical posterior", "Simulated posterior"), 
+           col=c("hotpink", "blue"), lty=c(1,1), bty="n",lwd=2)
+# Simulated prior predictive
+plot(density(posy_pred),
+     xlab=expression(posy_pred), col="blue",lwd=3,
+     main="Waiting Time",xlim=c(0,1000), ylim=c(0,0.020))
+# Analytical prior predictive
+curve(dpareto(x, posterior.a, posterior.b), 
+      add=TRUE, col="hotpink", lwd=1.5, lty=2,5)
+legend(cex=0.65,x=250,y=0.017,legend=c("Analytical posterior predictive", "Simulated posterior predictive"), 
+           col=c("hotpink", "blue"), lty=c(2,1), bty="n",lwd=3)
+par(old.par)
+```
+
+ Increasing the number of chains and warm up iterations led to a lower density of the simulated posterior and less similarity towards the analytical posterior. A reason for that could be that the model is overfitting and the model becomes too complex with more iterations and chains.   
+
+
+
+ <h1 style="color:blue">02 - A more elaborate mixture prior for the spinning coin</h1>
+
+(continued from Diaconis experiment)
+
+On reflection, it was decided that tails had come up more often than heads in the past; further some coins seemed likely to be symmetric. 
+
+Thus, a final approximation to the prior was taken as:
+
+$$
+    0.50\cdot\betadist(10,20) + 0.20\cdot\betadist(15,15) + 0.30\cdot\betadist(20,10).
+$$
+
+Same observed data as in the previous model.
+ 
+```{r}
+# Number of trials
+n<-10
+# Observed x
+x.obs<-3
+```
+
+
+
+ Perform a complete Bayesian analysis of this model, in close parallel to the first example.
+
+(1) Using the theoretical formulas (prior predictive pmf, posterior pdf, posterior predictive pmf)
+
+(2) Using independent random numbers (`rbeta()` functions, etc.)
+
+(3) JAGS version
+
+(4)$ {}^{\star}$ Stan version.
+
+>$ (\star)$ Hint: this one **is difficult** due to intrinsic limitations in Stan:   
+Stan does not allow integer parameters thus the JAGS code cannot be translated literally.  
+
+>As a matter of fact even a Stan version of the two-components prior mixture in `Mixture.priors.02.ipynb` 
+is tricky.   
+There are several possible workarounds; try to find one but do not despair if you fail to develop a workable version.
+
+Diaconis and Ylvisaker (1985) compare both mixture conjugate priors with a $ \operatorname{Unif}(0,1)$ prior with the data above. 
+
+Comparing the MAP estimators, they observe that in a first approximation, they coincide, but spreads do depend on the prior.
+
+They repeat the computations above with a larger sample.
+ 
+```{r}
+n1<-50
+x1.obs<-14
+```
+
+ Their conclusion is that with small data, prior matters, but with larger samples, a finely tuned choice of prior is less important.
+
+# Mixture PDF
+
+This model represents a mixture of three Beta distribution functions. This enables us to model it as Binomial distribution of size n with probability function being a Beta-Bernoulli distribution. 
+(*Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2014). Bayesian data analysis (Vol. 2). CRC press. Chapter 5)*
+
+
+We'll start by defining the parameters and the functions to compute the mixture prior.
+ 
+
+# parameters of the mixture prior
+```{r}
+prior.alpha1<-10
+prior.beta1<-20
+prior.alpha2<-15
+prior.beta2<-15
+prior.alpha3<-20
+prior.beta3<-10
+prior.gamma1<-0.5
+prior.gamma2<-0.2
+prior.gamma3<-0.3
+```
+
+Two functions to compute the pdf and cdf of the Betas
+
+```{r}
+mixture.prior.pdf<-function(theta){
+    return(prior.gamma1*dbeta(theta,prior.alpha1,prior.beta1)+prior.gamma2*dbeta(theta,prior.alpha2,prior.beta2)+prior.gamma3*dbeta(theta,prior.alpha3,prior.beta3))
+}
+mixture.prior.cdf<-function(theta){
+    return(prior.gamma1*pbeta(theta,prior.alpha1,prior.beta1)+prior.gamma2*pbeta(theta,prior.alpha2,prior.beta2)+prior.gamma3*pbeta(theta,prior.alpha3,prior.beta3))
+}
+```
+ 
+Plot the Mixture pdf 
+
+```{r}
+options(repr.plot.width=18,repr.plot.height=7)
+par(mfrow=c(1,2))
+u<-seq(0,1,length=1000)
+v<-mixture.prior.pdf(u)
+plot(u,v,ylim=c(0,max(v)*1.05),xlim=c(-0.15,1.15),
+     ylab="Density",type="l",lwd=3.5,col="hotpink",main=sprintf("Mixture pdf"))
+lines(c(-0.15,0),c(0,0),lwd=3.5,col="hotpink")
+lines(c(1,1.15),c(0,0),lwd=3.5,col="hotpink")
+```
+
+
+ # Bayesian analysis of this model
+
+# 1. Using the theoretical formulas
+
+ Set up of the posterior functions
+
+As we know if the prior distribuiton is a Beta distribution, then the posterior distribution is also a Beta distribution. The parameters of the posterir beta distribution can be extracted from the book John K. Kruschke, in Doing Bayesian Data Analysis (Second Edition). 
+
+If the prior distribution is Beta(a,b), then the posterior distribution is Beta(x+a, n-x+b), where n is the number of trials and x is the number of succes. 
+
+To compute the posterior functions, I need the marginals of the prior predictive. In our case, we can call $f_i$ to $p(x| \alpha_i, \beta_i) = \int Binonial(\theta |n,x) Beta(\alpha_i, \beta_i)d\theta= choose(n,x) \frac{B(x+\alpha_i, n-x+\beta_i)}{B(\alpha_i, \beta_i)}$. The last equality is because is a Betabinomial distribution. https://en.wikipedia.org/wiki/Beta-binomial_distribution
+
+With all this we can obtain the posterior density function and cumulative fuction as follows:
+ 
+```{r}
+
+# Calculating posterior alphas and betas
+posterior.alpha1<-prior.alpha1+x.obs
+posterior.beta1<-prior.beta1+n-x.obs
+posterior.alpha2<-prior.alpha2+x.obs
+posterior.beta2<-prior.beta2+n-x.obs
+posterior.alpha3<-prior.alpha3+x.obs
+posterior.beta3<-prior.beta3+n-x.obs
+
+# Calculate the marginals for x, integrating out theta
+f1<-choose(n,x.obs)*beta(posterior.alpha1,posterior.beta1)/beta(prior.alpha1,prior.beta1)
+f2<-choose(n,x.obs)*beta(posterior.alpha2,posterior.beta2)/beta(prior.alpha2,prior.beta2)
+f3<-choose(n,x.obs)*beta(posterior.alpha3,posterior.beta3)/beta(prior.alpha3,prior.beta3)
+
+# Initializing posterior gammas
+posterior.gamma1<-prior.gamma1*f1
+posterior.gamma2<-prior.gamma2*f2
+posterior.gamma3<-prior.gamma3*f3
+
+sum<-posterior.gamma1+posterior.gamma2+posterior.gamma3
+
+# normalizing the posterior gammas
+posterior.gamma1<-posterior.gamma1/sum
+posterior.gamma2<-posterior.gamma2/sum
+posterior.gamma3<-posterior.gamma3/sum
+
+# Initialize pdf and cdf functions for the new mixture
+mixture.posterior.pdf<-function(theta){
+    return(posterior.gamma1*dbeta(theta,posterior.alpha1,posterior.beta1)+posterior.gamma2*dbeta(theta,posterior.alpha2,posterior.beta2)+posterior.gamma3*dbeta(theta,posterior.alpha3,posterior.beta3))
+}
+
+mixture.posterior.cdf<-function(theta){
+    return(posterior.gamma1*pbeta(theta,posterior.alpha1,posterior.beta1)+posterior.gamma2*pbeta(theta,posterior.alpha2,posterior.beta2)+posterior.gamma3*pbeta(theta,posterior.alpha3,posterior.beta3))
+}
+```
+
+
+Plot theoretical posterior pdf and MAP estimator of $θ$
+
+The maximum of a mixture distribution cannot be computed directly because the mixture distribution is a combination of multiple component distributions, and the maximum of the mixture distribution may not correspond to the maximum of any of its individual components. Therefore, we are computing the maximum of the posterior pdf.
+ 
+```{r}
+options(repr.plot.width=18,repr.plot.height=7)
+par(mfrow=c(1,2))
+u<-seq(0,1,length=1000)
+v<-mixture.posterior.pdf(u)
+plot(u,v,ylim=c(0,max(v)*1.05),xlim=c(-0.15,1.15),
+     ylab="Density",type="l",lwd=3.5,col="hotpink",main=sprintf("Mixture posterior pdf"))
+lines(c(-0.15,0),c(0,0),lwd=3.5,col="hotpink")
+lines(c(1,1.15),c(0,0),lwd=3.5,col="hotpink")
+
+
+Theor.MAP<-u[which.max(v)]
+plot(u,v,ylim=c(0,max(v)*1.05),xlim=c(-0.15,1.15),
+     ylab="Density",type="l",lwd=3.5,col="hotpink",main=sprintf("Mixture posterior pdf with the MAP"))
+lines(c(-0.15,0),c(0,0),lwd=3.5,col="hotpink")
+lines(c(1,1.15),c(0,0),lwd=3.5,col="hotpink")
+
+abline(v=Theor.MAP,col="blue",lwd=4)
+map = round(Theor.MAP,3)
+name <- paste("MAP value:", map)
+legend(cex=0.6,x=0.5,y=3.5,legend=c("Mixture posterior pdf",name), 
+           col=c("hotpink", "blue"), lty=c(2,1), bty="n",lwd=3)
+
+```
+
+
+ Posterior Expectation
+
+First, we are calculating the theoretical posterior expectation of a mixture of three Beta distributions.
+ 
+
+# Theoretical Expectation
+
+The posterior expectation of a distribution is the expected value of the distribution after incorporatins prior knowledge and observed data. If the prior distribution is Beta(a,b), then the posterior distribution is Beta(x+a, n-x+b) and as we have read in the book he book John K. Kruschke, in Doing Bayesian Data Analysis (Second Edition), the expectation of the posterior distribution is given by $\frac{x+a}{(x+a+n-x+b)}$. In our case we have 3 beta distribution, each of them with a different probability gamma. Combining the 3 expectations depending on gamma we obtain the theoretical posterior expectation:
+
+```{r}
+Theor.Posterior.Expectation1<-(posterior.alpha1)/(posterior.alpha1+posterior.beta1)
+Theor.Posterior.Expectation2<-(posterior.alpha2)/(posterior.alpha2+posterior.beta2)
+Theor.Posterior.Expectation3<-(posterior.alpha3)/(posterior.alpha3+posterior.beta3)
+Theor.Posterior.Expectation<-posterior.gamma1*Theor.Posterior.Expectation1+
+    posterior.gamma2*Theor.Posterior.Expectation2+
+    posterior.gamma3*Theor.Posterior.Expectation3
+
+print(paste0("Theoretical Posterior expectation: ",round(Theor.Posterior.Expectation,3)))
+
+```
+
+
+Posterior Variance
+
+Now, we are calculating the theoretical posterior variance.
+ 
+The posterior variance is a measure of the uncertainty in the parameter of interest after observing the data, given the prior distribution and the likelihood function.To calculate the theoretical posterior variance of a mixture of three Beta distributions, we first calculate the individual posterior variances for each component, which can be obtained using the formula, we have obtained the formula from https://en.wikipedia.org/wiki/Beta_distribution:
+
+$$
+Var(\theta_i|x)=\frac{\alpha_i\beta_i}{(\alpha_i + \beta_i)^2(\alpha_i + \beta_i +1)}
+$$
+To calculate the total variance, it's not linear like in the expectation case, as the 3 beta distribution are not independent. So we can not say that the theoretical variance is the sum of the variance of each beta distribution times the posterior probabilities of each beta distribution. There should be another term that involves the expectation of each beta distribution and the posterior total expectation. We have not been able to figure out the correct expression of the posterior variance. But at least with the linear combination we have something near. 
+
+```{r}
+# Calculating the individual posterior variances for each component
+Theor.Posterior.Variance1<-(posterior.alpha1*posterior.beta1)/((posterior.alpha1+posterior.beta1)^2*(posterior.alpha1+posterior.beta1+1))
+Theor.Posterior.Variance2<-(posterior.alpha2*posterior.beta2)/((posterior.alpha2+posterior.beta2)^2*(posterior.alpha2+posterior.beta2+1))
+Theor.Posterior.Variance3<-(posterior.alpha3*posterior.beta3)/((posterior.alpha3+posterior.beta3)^2*(posterior.alpha3+posterior.beta3+1))
+
+Theor.Posterior.Variance<-posterior.gamma1*Theor.Posterior.Variance1+
+    posterior.gamma2*Theor.Posterior.Variance2+
+    posterior.gamma3*Theor.Posterior.Variance3
+
+
+print(paste0("Theoretical Posterior variance is near to  ",round(Theor.Posterior.Variance,3)))
+```
+
+
+
+# 2. Using independent random numbers
+
+Now we will try a different approach using independent numbers. We start with defining our parameters. These are the number of experiments we will perform (n_exp), the number of times each coin is flipped (n_flip) and the number of heads obtained (n_heads).
+ 
+```{r}
+n_exp <- 20000
+n_flip <- 10 
+m_heads <- 3
+```
+
+
+
+ We are generating 20,000 theta values for the problem by sampling from the distribution specified in the problem.
+
+To do this, we will follow two steps.
+In the first step, we will randomly define the beta distribution from which each coin comes, based on the corresponding probability.
+In the second step, we will generate a theta value for each coin using the function rbeta.
+ 
+```{r}
+# Assign from which theta distribution we will pick each coin
+#source_beta <- sample(c(1,2,3), replace = TRUE, size = n_exp, prob=c(0.5, 0.2, 0.3), col="lightpink")
+source_beta <- sample(c(1,2,3), replace = TRUE, size = n_exp, prob=c(0.5, 0.2, 0.3))
+
+
+# Generate thetas values picking coins from the corresponding beta distribution
+thetas <- c(rbeta(n_exp,10,20)[source_beta == 1], 
+            rbeta(n_exp,15,15)[source_beta == 2], 
+            rbeta(n_exp,20,10)[source_beta == 3])
+
+hist(thetas, breaks=50,col="lightpink")
+```
+
+ Subsequently, the simulation will flip each coin 'm' times (defined above as 10), following a binomial distribution with each coin's assigned theta value as the probability parameter. The resulting frequency of heads will be recorded, and a prior predictive probability mass function will be generated. The ensuing cell will display a table containing the head frequency data and the pmf. 
+
+```{r}
+# Number of heads in the trials
+heads <- rbinom(n = n_exp, size = n_flip, prob = thetas)
+
+# Absolute frequencies
+print("Absolute frequency of m heads:")
+table(heads)
+
+# Relative frequencies. 
+print("Relative frequency of m heads:")
+f <- table(heads)/sum(table(heads))
+f
+```
+
+
+
+Now we plot the values for the simulated prior predictive pmf 
+```{r}
+matplot(x=names(f),y=f,type="h",lwd=7, lty=1,col="lightpink",
+        xlab="x",ylab="Rel. Freqs..",
+        main="Simulated prior predictive pmf")
+```
+
+
+
+ With the ultimate objective of scrutinizing the likelihood of obtaining exactly n=3 heads, the cases resulting in such an outcome are selectively chosen. These chosen cases are then used to construct a histogram of thetas that give rise to the aforementioned occurrence. 
+```{r}
+# m=3 heads
+m.heads.idx <- heads == m_heads
+
+# Proportion m=3 heads
+print(paste0("Proportion of samples with m=3 heads: ", sum(m.heads.idx)/length(m.heads.idx)))
+
+# Thetas m=3 heads
+thetas.m.heads <- thetas[m.heads.idx]
+
+# Theta values generating m=3 heads
+hist(thetas.m.heads, breaks=50, freq=FALSE, main = "Histogram of thetas producing m heads", col="lightpink")
+```
+
+Analysis of the posterior quantities, MAP estimator of $θ$
+
+As done above, we will compute the simulated MAP as the $θ$ value with maximal density.
+ 
+```{r}
+thetas.m.heads.density <-density(thetas.m.heads)
+Sim.MAP <- thetas.m.heads.density$x[which.max(thetas.m.heads.density$y)]
+map = round(Theor.MAP,3)
+name <- paste("Simulated MAP value:", map)
+# Plot over histogram
+hist(thetas.m.heads, breaks=50, freq=FALSE, main="Histogram of thetas producing m=3 heads", col="lightpink")
+abline(v=Sim.MAP,col="DarkRed",lwd=4)
+lines(thetas.m.heads.density$x,thetas.m.heads.density$y,lwd=2.5,col="blue")
+
+legend(cex=0.65,x=0.6,y=3,legend=c("Theta density",name), 
+           col=c("blue","DarkRed"), lty=c(2,1), bty="n",lwd=3)
+
+```
+
+
+Posterior expectation, variance and quantiles
+
+The simulation offers the possibility to calculate the posterior expectation, as demonstrated in the following code block.
+ 
+```{r}
+# Simulated Expectation 
+print(paste0("Simulation based posterior expectation: ",round(mean(thetas.m.heads),3)))
+
+# Simulated Variance
+print(paste0("Simulation based posterior variance: ",round(var(thetas.m.heads),3)))
+
+
+# Simulated Quantiles
+print("Simulation based posterior quantiles: ")
+quantiles <- quantile(thetas.m.heads,c(0,0.25,0.50,0.75,1))
+round(quantiles,4)
+```
+
+
+
+# 3.  JAGS version
+
+Now, we are going to be conducting the same analysis using JAGS and we will install the corresponding packages.
+
+
+
+ Loading our data that is gonna be used in the Jags model, which is also defined below. 
+
+```{r}
+Mix.01.input_data<-list(a1=prior.alpha1,b1=prior.beta1,a2=prior.alpha2,b2=prior.beta2,b3=prior.beta3,a3=prior.alpha3
+                 ,gamma1=prior.gamma1,gamma2=prior.gamma2,gamma3=prior.gamma3,n=n,x=x.obs)
+
+```
+
+# JAGS model
+```{r}
+cat(
+"model
+    {
+    x~dbin(p,n)            
+    p<-theta[r]
+    r~dcat(g[])
+    theta[1]~dbeta(a1,b1) 
+    theta[2]~dbeta(a2,b2)
+    theta[3]~dbeta(a3,b3)
+    g[1]<-gamma1
+    g[2]<-gamma2
+    g[3]<-gamma3
+    }"
+    ,file="Mix.01.jag")
+```
+
+
+ These variables are important to control the behavior of the MCMC algorithm and ensure accurate and efficient estimation of the posterior distribution. 
+
+```{r}
+#Mix.01.m1<-jags(data=Mix.01.data, n.chains=4,n.iter=3500,n.burnin=500,
+Mix.01.m1<-jags(data=Mix.01.input_data, n.chains=4,n.iter=3500,n.burnin=500, 
+        parameters.to.save=c("theta","p"), model.file="Mix.01.jag")
+
+```
+
+
+View of some statistics of the JAGS model 
+
+```{r}
+print(Mix.01.m1)
+```
+
+
+
+Use traceplots to examine the chains for evidence of stationarity
+
+After that, we can exhibit the traceplot. The traceplot presents a graph of the sampled values for each variable in the chain as iterations progress. Each variable has a separate plot.
+ 
+```{r}
+
+options(repr.plot.width=15,repr.plot.height=5)
+traceplot(Mix.01.m1)
+```
+
+
+Ultimately, we can obtain a sample and generate a plot of the estimated posterior probability density function (PDF) based on that sample.
+
+
+```{r}
+p.sample<-Mix.01.m1$BUGSoutput$sims.list$p
+p.sample.density<-density(p.sample)
+plot(p.sample.density,lwd=2.5,col="lightpink",main=expression(paste("Estimated Posterior PDF")),cex.main=1.6)
+```
+
+
+
+
+# Analysis of posterior quantities
+
+Based on the results of these experiments, we can proceed with analyzing the posterior quantities. Here we calculate the MAP as the theta value with maximal density as done previously.
+
+```{r}
+# Finding MAP
+thetas.m.heads<-p.sample
+thetas.m.heads.density <-density(p.sample)
+Sim.MAP <- thetas.m.heads.density$x[which.max(thetas.m.heads.density$y)]
+
+# Plot over histogram
+hist(col="lightpink",thetas.m.heads, breaks=50, freq=FALSE, main="Histogram of thetas producing m heads")
+abline(v=Sim.MAP,col="DarkRed",lwd=4)
+#lines(thetas.m.heads.density,y,lwd=2.5,col="DarkGreen")
+lines(thetas.m.heads.density$x,thetas.m.heads.density$y,lwd=2.5,col="blue")
+```
+
+ 
+Expectations, variance and quantiles 
+
+```{r}
+# Simulated Expectation
+print(paste0("Simulation based posterior expectation:",round(mean(thetas.m.heads),3)))
+
+# Simulated Variance
+print(paste0("Simulation based posterior variance:",round(var(thetas.m.heads),3)))
+
+
+# Simulated Quantiles
+print("Simulation based posterior quantiles:")
+quantiles <- quantile(thetas.m.heads,c(0,0.25,0.50,0.75,1))
+round(quantiles,4)
+```
+
+# 4. Using STAN 
+
+```{r}
+modelString = "
+    data{
+        int<lower=0> n;
+        int<lower=0> x; 
+        real<lower=0> a1;
+        real<lower=0> b1;
+        real<lower=0> a2;
+        real<lower=0> b2;
+        real<lower=0> a3;
+        real<lower=0> b3;
+        real<lower=0, upper=1> gamma1;
+        real<lower=0, upper=1> gamma2;
+        real<lower=0, upper=1> gamma3;
+        real<lower=0, upper=1> cumgamma1;
+        real<lower=0, upper=1> cumgamma2;
+    }
+    parameters{
+        real<lower=0, upper=1> u;
+        simplex[3] theta; // size of theta is 3
+    }
+    transformed parameters{
+        real<lower=0, upper=1> p;
+        p = theta[1] * (u < cumgamma1) + theta[2] * (cumgamma1 <= u && u < cumgamma2) + theta[3] * (u >= cumgamma2);    // three-component mixture
+    }
+    model{
+        x ~ binomial(n, p);
+        theta[1] ~ beta(a1, b1);
+        theta[2] ~ beta(a2, b2);
+        theta[3] ~ beta(a3, b3);
+        u ~ uniform(0, 1);
+    }
+    generated quantities {
+    real y_pred;
+    y_pred = exponential_rng(1 / p); // generating simulated samples for the waiting                                       //  time prediction
+    }
+"
+
+```
+
+```{r}
+# Set initial values for theta
+init_theta <- list(list(theta=c(0.5, 0.5)), list(theta=c(0.4, 0.6)), list(theta=c(0.6, 0.4)))
+
+
+```
+
+```{r}
+stanDso <- stan_model( model_code=modelString )
+
+cumgamma1 <- prior.gamma1 / (prior.gamma1 + prior.gamma2 + prior.gamma3)
+
+cumgamma2 <- (prior.gamma1 + prior.gamma2) / (prior.gamma1 + prior.gamma2 + prior.gamma3)
+
+Mix.01.Standat <- list(a1=prior.alpha1, b1=prior.beta1, a2=prior.alpha2, b2=prior.beta2, b3=prior.beta3, a3=prior.alpha3,
+                       gamma1=prior.gamma1, gamma2=prior.gamma2, gamma3=prior.gamma3, n=n, x=x.obs,
+                       cumgamma1=cumgamma1, cumgamma2=cumgamma2)
+
+
+# Generate posterior sample with custom initial values
+stanFit <- sampling( object=stanDso, 
+                     data = Mix.01.Standat, 
+                     chains = 3,
+                     iter = 4000, 
+                     warmup = 200, 
+                     thin = 1,
+                     init_r = 0.1)
+```
+
+
+```{r}
+print(Mix.01.Standat)
+```
+
+
+```{r}
+posterior_samples <- extract(stanFit)$p # a list of MCMC samples for the parameter p (three-component mixture)
+```
+
+Examine the posterior distribution of theta
+
+```{r}
+ggplot(data.frame(p = posterior_samples), aes(x = p)) +
+  geom_density(fill = "lightpink", alpha = 0.3) +
+  ggtitle("Posterior distribution of a three-component mixture")
+```
+Posterior predictive distribution of prediction waiting time
+
+```{r}
+# extract posterior samples of y_pred
+y_pred_samples <- extract(stanFit)$y_pred
+
+# plot posterior predictive distribution of y_pred
+ggplot(data.frame(y_pred = y_pred_samples), aes(x = y_pred)) +
+  geom_histogram(binwidth = 0.5, color = "white", fill = "lightpink", alpha = 0.3) +
+  ggtitle("Posterior predictive distribution of waiting time") +
+  xlab("Waiting time")
+
+```
+
+
+
